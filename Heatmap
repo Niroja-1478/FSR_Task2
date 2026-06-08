@@ -1,0 +1,452 @@
+import pandas as pd
+import numpy as np
+import re
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# =========================================================
+# MACBOOK DIRECTORY
+# =========================================================
+
+BASE_PATH = "/Users/nirojabalakumar/Desktop/FSR"
+
+# =========================================================
+# OUTPUT FOLDERS
+# =========================================================
+
+MASTER_OUT = os.path.join(
+    BASE_PATH,
+    "FSR_Heatmap_Results"
+)
+
+SUMMARY_OUT = os.path.join(
+    MASTER_OUT,
+    "Study_Level_Results"
+)
+
+os.makedirs(MASTER_OUT, exist_ok=True)
+os.makedirs(SUMMARY_OUT, exist_ok=True)
+
+# =========================================================
+# SETTINGS
+# =========================================================
+
+TARGET_ANGLES = [
+    -90, -75, -60, -45,
+    -30, -15, 0,
+    15, 30, 45,
+    60, 75, 90
+]
+
+EXCLUDED_P = ['P02','P14', 'P16', 'P17', 'P18']
+
+# =========================================================
+# FIX LANDMARK NAMES
+# =========================================================
+
+def fix_landmark_name(name):
+
+    n = str(name).strip()
+    nl = n.lower().replace(" ", "")
+
+    if nl == "greatertrochanterright":
+        return "Greater Trochanter Right"
+
+    if nl == "greatertrochanterleft":
+        return "Greater Trochanter Left"
+
+    if nl == "ischialtuberosityright":
+        return "Ischial Tuberosity Right"
+
+    if nl == "ischialtuberosityleft":
+        return "Ischial Tuberosity Left"
+
+    if nl == "heelright":
+        return "Heel Right"
+
+    if nl == "heelleft":
+        return "Heel Left"
+
+    if nl == "sacrum":
+        return "Sacrum"
+
+    if nl == "occiput":
+        return "Occiput"
+
+    return n
+
+# =========================================================
+# PARTICIPANT PIPELINE
+# =========================================================
+
+def process_participant(file_path, p_id):
+
+    print(f"Processing {p_id}")
+
+    out_dir = os.path.join(MASTER_OUT, p_id)
+    os.makedirs(out_dir, exist_ok=True)
+
+    # =========================================
+    # READ EXCEL
+    # =========================================
+
+    df = pd.read_excel(file_path, header=None)
+
+    headers = df.iloc[0]
+    metadata = df.iloc[1].astype(str)
+
+    # =========================================
+    # FIND SENSOR COLUMNS
+    # =========================================
+
+    sensor_cols = [
+        i for i, c in enumerate(headers)
+        if str(c).lower().startswith("sensor")
+    ]
+
+    landmarks_map = {
+        i: fix_landmark_name(metadata[i])
+        for i in sensor_cols
+    }
+
+    # =========================================
+    # FIND POSITION COLUMN
+    # =========================================
+
+    try:
+
+        spec_col = metadata[
+            metadata.str.contains(
+                "Specific Position",
+                case=False,
+                na=False
+            )
+        ].index[0]
+
+    except:
+
+        spec_col = 10
+
+    # =========================================
+    # DATA SECTION
+    # =========================================
+
+    data = df.iloc[2:].copy()
+
+    def extract_angle(x):
+
+        m = re.search(r'([-+]?\d+)', str(x))
+
+        return int(m.group(1)) if m else None
+
+    data['Angle_Int'] = data[spec_col].apply(extract_angle)
+
+    data = data[
+        data['Angle_Int'].isin(TARGET_ANGLES)
+    ]
+
+    if data.empty:
+
+        print(f"No valid angles for {p_id}")
+
+        return None
+
+    # =========================================
+    # CONVERT SENSOR VALUES
+    # =========================================
+
+    for col in sensor_cols:
+
+        data[col] = pd.to_numeric(
+            data[col],
+            errors='coerce'
+        ).fillna(0)
+
+        # Calibration equation
+        data[col] = data[col].apply(
+            lambda x: 119.33 + 0.82 * x if x > 0 else 119.33
+        )
+
+    # =========================================
+    # CREATE ANALYSIS DATAFRAME
+    # =========================================
+
+    analysis_df = data[
+        sensor_cols + ['Angle_Int']
+    ].rename(columns=landmarks_map)
+
+    # =========================================
+    # MEAN FORCE PER ANGLE
+    # =========================================
+
+    mean_force = (
+        analysis_df
+        .groupby('Angle_Int')
+        .mean()
+        .sort_index()
+    )
+
+    # =========================================
+    # SAVE RAW MEAN DATA
+    # =========================================
+
+    mean_force.to_excel(
+        os.path.join(
+            out_dir,
+            f"{p_id}_Mean_Force.xlsx"
+        )
+    )
+
+    # =========================================
+    # HEATMAP ORDER
+    # =========================================
+
+    desired_order = [
+        "Greater Trochanter Left",
+        "Greater Trochanter Right",
+        "Sacrum",
+        "Occiput",
+        "Ischial Tuberosity Left",
+        "Ischial Tuberosity Right",
+        "Heel Left",
+        "Heel Right"
+    ]
+
+    ordered_cols = [
+        c for c in desired_order
+        if c in mean_force.columns
+    ]
+
+    heat_df = mean_force[ordered_cols]
+
+    # =========================================
+    # NORMALIZE
+    # =========================================
+
+    heat_norm = heat_df.div(
+        heat_df.max(axis=0),
+        axis=1
+    )
+
+    # =========================================
+    # SAVE HEATMAP DATA
+    # =========================================
+
+    heat_norm.to_excel(
+        os.path.join(
+            out_dir,
+            f"{p_id}_Heatmap_Data.xlsx"
+        )
+    )
+
+    # =========================================
+    # PARTICIPANT HEATMAP
+    # =========================================
+
+    plt.figure(figsize=(12, 8))
+
+    sns.heatmap(
+        heat_norm,
+        annot=True,
+        cmap='rocket',
+        fmt=".2f",
+        linewidths=0.5,
+        vmin=0,
+        vmax=1
+    )
+
+    plt.title(
+        f"{p_id}: Relative Pressure Heatmap",
+        fontweight='bold'
+    )
+
+    plt.xlabel("Anatomical Location")
+    plt.ylabel("Turning Angle")
+
+    plt.tight_layout()
+
+    plt.savefig(
+        os.path.join(
+            out_dir,
+            f"{p_id}_Heatmap.png"
+        ),
+        dpi=300
+    )
+
+    plt.close()
+
+    # store participant ID
+    mean_force['Participant'] = p_id
+
+    return mean_force
+
+# =========================================================
+# MAIN
+# =========================================================
+
+if __name__ == "__main__":
+
+    all_results = []
+
+    # =========================================
+    # FIND ALL FSR FILES
+    # =========================================
+
+    fsr_files = [
+
+        f for f in os.listdir(BASE_PATH)
+
+        if f.startswith("FSR_P")
+        and f.endswith("_T2_Labelled.xlsx")
+    ]
+
+    print(f"Found {len(fsr_files)} participant files")
+
+    # =========================================
+    # PROCESS PARTICIPANTS
+    # =========================================
+
+    for fsr_file in sorted(fsr_files):
+
+        p_id = fsr_file.split("_")[1]
+
+        if p_id in EXCLUDED_P:
+
+            print(f"Skipping {p_id}")
+
+            continue
+
+        file_path = os.path.join(
+            BASE_PATH,
+            fsr_file
+        )
+
+        try:
+
+            result = process_participant(
+                file_path,
+                p_id
+            )
+
+            if result is not None:
+
+                all_results.append(result)
+
+        except Exception as e:
+
+            print(f"Failed {p_id}: {e}")
+
+    # =====================================================
+    # STUDY-LEVEL AVERAGE
+    # =====================================================
+
+    if all_results:
+
+        print("Generating study-level heatmap")
+
+        master = pd.concat(all_results)
+
+        # average across participants
+        study_mean = (
+
+            master
+            .groupby(master.index)
+            .mean(numeric_only=True)
+            .sort_index()
+        )
+
+        # =========================================
+        # SAVE STUDY DATA
+        # =========================================
+
+        study_mean.to_excel(
+            os.path.join(
+                SUMMARY_OUT,
+                "Study_Average_By_Angle.xlsx"
+            )
+        )
+
+        # =========================================
+        # ORDER COLUMNS
+        # =========================================
+
+        desired_order = [
+            "Greater Trochanter Left",
+            "Greater Trochanter Right",
+            "Sacrum",
+            "Occiput",
+            "Ischial Tuberosity Left",
+            "Ischial Tuberosity Right",
+            "Heel Left",
+            "Heel Right"
+        ]
+
+        ordered_cols = [
+            c for c in desired_order
+            if c in study_mean.columns
+        ]
+
+        heat_df = study_mean[ordered_cols]
+
+        # =========================================
+        # NORMALIZE STUDY HEATMAP
+        # =========================================
+        heat_norm = (
+
+            heat_df - heat_df.min(axis=0)
+        
+        ) / (
+        
+            heat_df.max(axis=0) - heat_df.min(axis=0)
+        
+        )
+
+        # =========================================
+        # SAVE STUDY HEATMAP DATA
+        # =========================================
+
+        heat_norm.to_excel(
+            os.path.join(
+                SUMMARY_OUT,
+                "Study_Average_Heatmap_Data.xlsx"
+            )
+        )
+
+        # =========================================
+        # STUDY HEATMAP
+        # =========================================
+
+        plt.figure(figsize=(12, 8))
+
+        sns.heatmap(
+            heat_norm,
+            annot=True,
+            cmap='rocket',
+            fmt=".2f",
+            linewidths=0.5,
+            vmin=0,
+            vmax=1
+        )
+
+        plt.title(
+            "Study Average Relative Pressure Heatmap",
+            fontweight='bold'
+        )
+
+        plt.xlabel("Anatomical Location")
+        plt.ylabel("Turning Angle")
+
+        plt.tight_layout()
+
+        plt.savefig(
+            os.path.join(
+                SUMMARY_OUT,
+                "Study_Average_Heatmap.png"
+            ),
+            dpi=300
+        )
+
+        plt.close()
+
+        print("DONE")
