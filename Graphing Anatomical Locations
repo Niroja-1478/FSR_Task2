@@ -1,0 +1,34 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import os
+
+# =========================================================
+# FILE PATH
+# =========================================================
+
+FILE_PATH = "/Users/nirojabalakumar/Desktop/FSR/FSR_Heatmap_Results/Study_Level_Results/Study_Average_Heatmap_Data.xlsx"
+
+# =========================================================
+# OUTPUT FOLDER
+# =========================================================
+
+OUTPUT_DIR = "/Users/nirojabalakumar/Desktop/FSR/FSR_Heatmap_Results/Study_Level_Results"
+
+# =========================================================
+# LOAD EXCEL FILE
+# =========================================================
+
+df = pd.read_excel(FILE_PATH)
+
+# =========================================================
+# CLEAN COLUMN NAMES
+# =========================================================
+
+df.columns = df.columns.str.strip()
+
+# =========================================================
+# EXTRACT ANGLES
+# =========================================================
+
+# first column should contain turning angles
+angle_col = df.columns[0]
